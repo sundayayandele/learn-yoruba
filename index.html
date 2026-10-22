@@ -108,6 +108,11 @@ svg{display:block}
 .tip{margin-top:16px;border-radius:var(--r-card);background:var(--sel-bg);border:2px solid var(--macaw);padding:14px 16px;font-weight:700}
 .tag{display:inline-flex;margin-right:8px;padding:2px 10px;border-radius:var(--r-pill);background:var(--macaw);color:#fff;font:800 11px/18px var(--font);letter-spacing:.04em;text-transform:uppercase}
 
+/* pronunciation controls */
+.audio-controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;width:100%;margin-top:8px}
+.audio-btn{background:var(--sel-bg);border:2px solid var(--macaw);border-radius:12px;padding:8px 12px;min-height:44px;cursor:pointer;font-weight:800}
+.audio-btn:disabled{border-color:var(--line);color:var(--muted);background:var(--surface);cursor:default}
+.audio-note{font-size:14px;color:var(--muted)}
 /* exercise */
 .prompt{font-size:26px;line-height:1.25;margin:8px 0 16px}
 .say{display:flex;align-items:center;gap:12px;margin-bottom:20px}
@@ -229,10 +234,18 @@ var UNITS=[
   {title:"On the plate",tip:"Iṣu (yam) is a staple in Yorùbá cooking. Pounded yam is called iyán.",
    items:[["Ẹran","Meat"],["Búrẹ́dì","Bread"],["Iṣu","Yam"],["Ata","Pepper"],["Ewà","Beans"]]}]}
 ];
+// Set ready only after the recording has been uploaded and reviewed.
+var GREETING_AUDIO=[
+ {id:"greeting-morning",ready:false},
+ {id:"greeting-afternoon",ready:false},
+ {id:"greeting-evening",ready:false},
+ {id:"greeting-welcome",ready:false},
+ {id:"greeting-goodbye",ready:false}
+];
 var LESSONS=[],ALL=[];
 UNITS.forEach(function(u,ui){u.lessons.forEach(function(l){
   l.id=LESSONS.length;l.unit=ui;
-  l.items=l.items.map(function(p){return {y:p[0],e:p[1]};});
+  l.items=l.items.map(function(p){var a=l.id===0?GREETING_AUDIO[l.items.indexOf(p)]:null;return {y:p[0],e:p[1],audio:a};});
   LESSONS.push(l);l.items.forEach(function(it){ALL.push(it);});
 });});
 
@@ -285,6 +298,43 @@ function mascot(mood,cls,size){
    +'<circle class="mc-pupil" cx="47" cy="'+py+'" r="4.2"/><circle class="mc-pupil" cx="73" cy="'+py+'" r="4.2"/>'
    +brows+mouth+'</svg>';
 }
+
+/* ---------- pronunciation: one player survives render() ---------- */
+var audioPlayer=new Audio(),audioRequest=0,audioId=null,audioState="idle";
+audioPlayer.preload="none";
+function stopAudio(){
+  audioRequest++;audioPlayer.pause();audioPlayer.removeAttribute("src");audioPlayer.load();
+  audioId=null;audioState="idle";syncAudio();
+}
+function syncAudio(){
+  document.querySelectorAll('[data-act="play-audio"]').forEach(function(b){
+    var active=b.getAttribute("data-audio")===audioId;
+    b.setAttribute("aria-busy",String(active&&audioState==="loading"));
+    b.textContent=active&&audioState==="loading"?"Loading…":active&&audioState==="playing"?"↻ Replay":"🔊 Listen";
+  });
+}
+function audioControls(it){
+  if(!it||!it.audio)return "";
+  var a=it.audio;
+  if(!a.ready)return '<div class="audio-controls"><button class="audio-btn" disabled>🔊 Listen</button><span class="audio-note">Recording coming soon</span></div>';
+  return '<div class="audio-controls"><button class="audio-btn" data-act="play-audio" data-audio="'+a.id+'" aria-label="Listen to pronunciation: '+it.y+'">🔊 Listen</button></div>';
+}
+function playAudio(id){
+  var a=GREETING_AUDIO.find(function(x){return x.id===id&&x.ready;});if(!a)return;
+  stopAudio();var request=audioRequest;audioId=id;audioState="loading";syncAudio();
+  audioPlayer.src=new URL("./audio/yo/"+a.id+".mp3",document.baseURI).href;
+  audioPlayer.play().then(function(){
+    if(request!==audioRequest)return;audioState="playing";syncAudio();
+  }).catch(function(){
+    if(request!==audioRequest)return;stopAudio();toast("Audio could not play. Tap Listen to try again.");
+  });
+}
+audioPlayer.addEventListener("ended",function(){audioId=null;audioState="idle";syncAudio();});
+audioPlayer.addEventListener("error",function(){
+  if(!audioId)return;stopAudio();toast("Audio is unavailable. You can keep learning.");
+});
+document.addEventListener("visibilitychange",function(){if(document.hidden)stopAudio();});
+window.addEventListener("pagehide",stopAudio);
 
 /* ---------- question builder ---------- */
 function buildQuestions(lesson){
@@ -344,7 +394,7 @@ function home(){
 
 function learn(){
   var l=LESSONS[V.i];
-  var words=l.items.map(function(it){return '<div class="word"><span class="yo">'+Y(it.y)+'</span><span class="en">'+it.e+'</span></div>';}).join("");
+  var words=l.items.map(function(it){return '<div class="word"><span class="yo">'+Y(it.y)+'</span><span class="en">'+it.e+'</span>'+audioControls(it)+'</div>';}).join("");
   return '<div class="head"><button class="x" data-act="home" aria-label="Back to course">'+IC.cross(26,"var(--faint)")+'</button></div>'
    +'<div class="pad"><p class="lede" style="margin:0">Unit '+(l.unit+1)+' · '+UNITS[l.unit].title+'</p><h1 class="title">'+l.title+'</h1>'
    +'<p class="lede">Here is what you will learn. Take a look, then start.</p>'
@@ -362,7 +412,7 @@ function lessonView(){
   if(q.type==="pickEn"||q.type==="pickYo"){
     var yoToEn=q.type==="pickEn";
     body='<h2 class="prompt">'+(yoToEn?"What does this mean?":"How do you say this in Yorùbá?")+'</h2>'
-      +'<div class="say">'+mascot(mood,hop,76)+'<div class="bubble">'+(yoToEn?Y(q.it.y):q.it.e)+'</div></div><div class="opts" role="group">'
+      +'<div class="say">'+mascot(mood,hop,76)+'<div class="bubble">'+(yoToEn?Y(q.it.y):q.it.e)+(yoToEn?audioControls(q.it):'')+'</div></div><div class="opts" role="group">'
       +q.opts.map(function(o,i){
         var cls="opt";
         if(fb){if(o.c)cls+=" ok";else if(L.sel===i)cls+=" bad";}else if(L.sel===i)cls+=" sel";
@@ -387,7 +437,7 @@ function lessonView(){
   var bar;
   if(fb){
     bar='<div class="bar '+(fb.ok?"ok":"bad")+'"><div><div class="fb"><span class="badge">'+(fb.ok?IC.check(26,"var(--green)"):IC.cross(24,"var(--red)"))+'</span><div><p class="msg">'+fb.msg+'</p>'
-      +(fb.ok||!fb.answer?'':'<p class="ans">Correct answer: '+fb.answer+'</p>')+'</div></div>'
+      +(fb.ok||!fb.answer?'':'<p class="ans">Correct answer: '+fb.answer+'</p>')+(q.type==='pickYo'||q.type==='build'?audioControls(q.it):'')+'</div></div>'
       +'<button class="btn'+(fb.ok?'':' danger')+'" data-act="next">Continue</button></div></div>';
   }else if(q.type==="match"){
     bar='<div class="bar"><div><button class="btn" disabled>Check</button></div></div>';
@@ -421,7 +471,7 @@ function failed(){
 /* ---------- render ---------- */
 function render(){
   var h=V.name==="home"?home():V.name==="learn"?learn():V.name==="lesson"?lessonView():V.name==="finish"?finish():failed();
-  app.innerHTML=h;
+  app.innerHTML=h;syncAudio();
 }
 var app=document.getElementById("app");
 function toast(msg){
@@ -429,7 +479,7 @@ function toast(msg){
   var d=document.createElement("div");d.className="toast";d.setAttribute("role","status");d.textContent=msg;document.body.appendChild(d);
   clearTimeout(toastT);toastT=setTimeout(function(){d.remove();},2200);
 }
-function go(name,extra){V=Object.assign({name:name},extra||{});window.scrollTo(0,0);render();}
+function go(name,extra){stopAudio();V=Object.assign({name:name},extra||{});window.scrollTo(0,0);render();}
 
 /* ---------- lesson flow ---------- */
 function startLesson(){
@@ -456,6 +506,7 @@ function check(){
   render();
 }
 function next(){
+  stopAudio();
   if(L.fb&&!L.fb.ok&&L.hearts<=0){go("failed");return;}
   L.qi++;
   if(L.qi>=L.qs.length){complete();return;}
@@ -492,6 +543,7 @@ document.addEventListener("click",function(e){
   var b=e.target.closest("[data-act]");if(!b)return;
   var act=b.getAttribute("data-act"),i=+b.getAttribute("data-i");
   if(act!=="reset"&&resetArm){resetArm=false;}
+  if(act==="play-audio"){playAudio(b.getAttribute("data-audio"));return;}
   if(act==="open"){
     if(!unlocked(i)){toast("Finish the lesson before this one to unlock it.");return;}
     go("learn",{i:i});
@@ -503,7 +555,7 @@ document.addEventListener("click",function(e){
   else if(act==="tile"){if(L.fb||L.picked.indexOf(i)>-1)return;L.picked.push(i);render();}
   else if(act==="untile"){if(L.fb)return;L.picked=L.picked.filter(function(x){return x!==i;});render();}
   else if(act==="m"){matchTap(b.getAttribute("data-side"),i);}
-  else if(act==="quit"){L.quit=true;render();}
+  else if(act==="quit"){stopAudio();L.quit=true;render();}
   else if(act==="keep"){L.quit=false;render();}
   else if(act==="reset"){
     if(!resetArm){resetArm=true;render();return;}
