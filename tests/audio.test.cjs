@@ -3,17 +3,21 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const vm=require('node:vm');
 const path=require('node:path');
-function setup(){
+function setup(withSpeech=false){
   const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
   let script=html.match(/<script>([\s\S]*?)<\/script>/)[1];
-  script=script.replace('render();\n})();','globalThis.api={GREETING_AUDIO,LESSONS,playAudio,stopAudio,audioControls,learn,lessonView,render,go,player:audioPlayer,state:()=>audioState,setQuestion(q,fb){L={qs:[q],qi:0,done:0,initial:1,hearts:5,sel:-1,picked:[],fb};},setLearn(){V={name:"learn",i:0};}};\nrender();\n})();');
+  script=script.replace('render();\n})();','globalThis.api={speakGreeting,selectedSpeechVoice,speechSettings,GREETING_AUDIO,LESSONS,playAudio,stopAudio,audioControls,learn,lessonView,render,go,player:audioPlayer,state:()=>audioState,setQuestion(q,fb){L={qs:[q],qi:0,done:0,initial:1,hearts:5,sel:-1,picked:[],fb};},setLearn(){V={name:"learn",i:0};}};\nrender();\n})();');
   const app={innerHTML:''};const notices=[];
   class Audio{constructor(){this.events={};this.calls=0;}pause(){}load(){}removeAttribute(){this.src='';}addEventListener(k,f){this.events[k]=f;}play(){this.calls++;return this.result||Promise.resolve();}}
   const context={Audio,URL,console,setTimeout:()=>0,clearTimeout(){},localStorage:{getItem:()=>null},window:{scrollTo(){},addEventListener(){}},document:{baseURI:'https://example.github.io/learn-yoruba/',getElementById:()=>app,querySelectorAll:()=>[],querySelector:()=>null,addEventListener(){},createElement:()=>({setAttribute(){}}),body:{appendChild(d){notices.push(d.textContent);}}}};
-  vm.createContext(context);vm.runInContext(script,context);return {...context.api,app,notices};
+  if(withSpeech){
+    context.window.SpeechSynthesisUtterance=class {constructor(text){this.text=text;}};
+    context.window.speechSynthesis={voices:[],spoken:[],getVoices(){return this.voices;},cancel(){},addEventListener(){},speak(u){this.spoken.push(u);}};
+  }
+  vm.createContext(context);vm.runInContext(script,context);return {...context.api,app,notices,synth:context.window.speechSynthesis};
 }
 test('pending recordings do not request audio and only first lesson has controls',()=>{
- const a=setup();a.setLearn();assert.equal((a.learn().match(/Recording coming soon/g)||[]).length,5);
+ const a=setup();a.setLearn();assert.equal((a.learn().match(/native recording coming soon/g)||[]).length,5);
  a.playAudio('greeting-morning');assert.equal(a.player.calls,0);assert.equal(a.audioControls(a.LESSONS[1].items[0]),'');
 });
 test('reviewed clip uses project-relative URL and survives re-render',async()=>{
@@ -36,4 +40,16 @@ test('translation answers have audio only after checking',()=>{
  const a=setup();a.GREETING_AUDIO[0].ready=true;const q={type:'pickYo',it:a.LESSONS[0].items[0],opts:[{t:'test',c:true}]};
  a.setQuestion(q,null);assert.doesNotMatch(a.lessonView(),/data-act="play-audio"/);
  a.setQuestion(q,{ok:true,msg:'Correct'});assert.match(a.lessonView(),/data-act="play-audio"/);
+});
+
+test('speech prefers an available Yoruba voice and speaks corrected greeting',()=>{
+ const a=setup(true);a.synth.voices=[{voiceURI:'en',lang:'en-US',name:'English'},{voiceURI:'yo',lang:'yo-NG',name:'Yoruba'}];
+ a.speakGreeting('greeting-morning');assert.equal(a.synth.spoken[0].text,'Ẹ kú òwúrọ̀');assert.equal(a.synth.spoken[0].lang,'yo-NG');
+});
+test('speech does not silently use a non-Yoruba voice',()=>{
+ const a=setup(true);a.synth.voices=[{voiceURI:'en',lang:'en-US',name:'English'}];
+ a.speakGreeting('greeting-afternoon');assert.equal(a.synth.spoken.length,0);assert.match(a.notices[0],/Choose a voice/);
+});
+test('unsupported speech has a useful fallback',()=>{
+ const a=setup();a.speakGreeting('greeting-evening');assert.match(a.notices[0],/not supported/);
 });
